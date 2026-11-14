@@ -7,6 +7,7 @@
   "scripts": {
     "setup": "tsx src/setup.ts",
     "s01": "tsx src/s01-agent-loop.ts",
+    "s02": "tsx src/s02-tool-use.ts",
     "typecheck": "tsc --noEmit"
   },
   "engines": {
