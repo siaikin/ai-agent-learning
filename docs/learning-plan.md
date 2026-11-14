@@ -47,7 +47,7 @@ Claude Code、Codex CLI、Cursor Agent 本质上都是 harness。你要做的就
 ### 建议补充的资料
 
 - Anthropic《Building Effective Agents》：workflow 和 agent 的区别，几种常见模式，最适合入门
-- [Model Context Protocol](https://modelcontextprotocol.io) 规范与 TypeScript SDK（对应教程 s19）
+- [Model Context Protocol](https://modelcontextprotocol.io) 规范与 TypeScript SDK（对应教程 s19），重点看 tools 和 elicitation 两节
 - Anthropic 官方 API 文档里的 Tool use、Prompt caching、Streaming 章节
 - `anthropics/claude-quickstarts` 仓库里的 `autonomous-coding` 示例：资料 4 的配套代码
 
@@ -65,7 +65,32 @@ Claude Code、Codex CLI、Cursor Agent 本质上都是 harness。你要做的就
 - s02 Tool Use：read / write / edit / grep / bash 五个工具，并行调用
 - s03 Permission：权限系统
 - s04 Hooks：在工具调用前后插入逻辑
+- **专题：结构化人机交互（human-in-the-loop UI）**，见下方说明
 - **产出**：用 TS 写出 `my-harness` v0.1，一个能在终端读写文件、执行命令的 CLI agent，带权限确认
+
+#### 专题：结构化人机交互
+
+起因：在 Claude Code 里，agent 要 API Key 时弹出了一张安全表单，而没有让你把 key 贴进聊天框。这张表单的结构和样式是 harness 预先做好的，模型只负责决定什么时候弹、填哪些参数：
+
+1. harness 把一个工具注册给模型，比如 `request_credential(host, display_name, reason, suggested_type)`
+2. 模型判断需要 key 时调用这个工具，和调用 `read_file` 没有区别
+3. harness 拦截这次调用。它不去执行什么命令，而是让客户端渲染一个**预先写好的 UI 组件**，用模型给的参数填进标题、名称和说明
+4. 用户填写的值不回到模型那里：它直接存进环境配置，由网络代理在请求 `api.deepseek.com` 时加到请求头上。模型拿到的工具结果只有 `saved` 或 `declined`
+5. 模型根据这个结果继续下一步
+
+要点：
+
+- **模型给意图，harness 负责渲染。** 模型输出的是结构化参数，不是 HTML，所以界面可控，也不会被提示词注入改掉样式
+- **敏感数据绕开上下文。** 密钥不进入对话记录，也就不会出现在日志、压缩摘要或训练数据里
+- **工具调用等于一次阻塞的用户输入。** agent 循环在这里暂停，等用户提交、拒绝或超时后再恢复。权限确认（s03）、`AskUserQuestion` 选择题、计划审批都是这个模式
+- 对应的标准：MCP 的 **elicitation**（server 向客户端请求结构化用户输入，用 JSON Schema 描述表单字段）
+
+在 `my-harness` 里练习（前端优势，可以做得比 CLI 更好）：
+
+- [ ] 定义一个 `ask_user` 工具：参数是 JSON Schema，终端里用 `@inquirer/prompts` 渲染成表单，Web UI 里用 Vue 渲染
+- [ ] 定义一个 `request_secret` 工具：值写入本地 `.env` 或系统钥匙串，工具结果只返回状态，写测试确认密钥不出现在 messages 数组里
+- [ ] 把 s03 的权限确认改造成同一套机制：同意、拒绝、"本次会话都允许" 三个选项
+- [ ] 处理用户拒绝和超时：模型收到 `declined` 后应当换方案，而不是反复弹窗
 
 ### 阶段 2：规划、上下文与记忆（第 5–8 周）· 教程 s05–s11
 - s05 TodoWrite、s06 Subagent、s07 Skills
