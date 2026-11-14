@@ -1,0 +1,176 @@
+/**
+ * 交互式配置表单：npm run setup
+ *
+ * 填写 API 地址 / API Key / 模型 → 测试连通性 → 写入 harness/.env
+ * 再次运行时，回车即可保留当前值。
+ */
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { createInterface } from "node:readline/promises";
+import { DEFAULTS, ENV_PATH, createClient, type LLMConfig } from "./config.js";
+
+/** 普通输入：每次提问新建一个 readline，用完即关，避免和下面的密码输入抢 stdin */
+async function question(prompt: string) {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    return await rl.question(prompt);
+  } finally {
+    rl.close();
+  }
+}
+
+/** 密码输入：raw 模式下逐字符读取，屏幕上只显示 * */
+function questionSecret(prompt: string): Promise<string> {
+  const { stdin, stdout } = process;
+  if (!stdin.isTTY) return question(prompt); // 非终端（如管道输入）时退化为普通输入
+  return new Promise((resolve) => {
+    let value = "";
+    stdout.write(prompt);
+    stdin.setRawMode(true);
+    stdin.setEncoding("utf8");
+    stdin.resume();
+    const onData = (chunk: string) => {
+      for (const ch of chunk) {
+        if (ch === "\r" || ch === "\n") {
+          stdin.off("data", onData);
+          stdin.setRawMode(false);
+          stdin.pause();
+          stdout.write("\n");
+          return resolve(value);
+        }
+        if (ch === "\u0003") {
+          // Ctrl+C
+          stdin.setRawMode(false);
+          stdout.write("\n");
+          process.exit(130);
+        }
+        if (ch === "\u007f" || ch === "\b") {
+          // 退格
+          if (value) {
+            value = value.slice(0, -1);
+            stdout.write("\b \b");
+          }
+          continue;
+        }
+        if (ch < " ") continue; // 忽略其他控制字符
+        value += ch;
+        stdout.write("*");
+      }
+    };
+    stdin.on("data", onData);
+  });
+}
+
+function readEnvFile(): Record<string, string> {
+  if (!existsSync(ENV_PATH)) return {};
+  const env: Record<string, string> = {};
+  for (const line of readFileSync(ENV_PATH, "utf8").split("\n")) {
+    const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
+    if (m?.[1]) env[m[1]] = m[2]!.replace(/^["']|["']$/g, "");
+  }
+  return env;
+}
+
+function maskKey(key: string) {
+  return key.length <= 8 ? "****" : `${key.slice(0, 3)}****${key.slice(-4)}`;
+}
+
+/** 规范化 API 地址：去掉结尾的 / 和误填的 /chat/completions */
+function normalizeBaseURL(input: string) {
+  let url = input.trim().replace(/\/+$/, "");
+  if (url.endsWith("/chat/completions")) {
+    url = url.slice(0, -"/chat/completions".length);
+    console.log(`  已去掉结尾的 /chat/completions → ${url}`);
+  }
+  new URL(url); // 格式不对会抛错
+  return url;
+}
+
+async function ask(label: string, current: string, opts: { secret?: boolean } = {}) {
+  const shown = current ? (opts.secret ? maskKey(current) : current) : "";
+  const hint = shown ? ` \x1b[2m[${shown}]\x1b[0m` : "";
+  const prompt = `${label}${hint}: `;
+  const answer = (opts.secret ? await questionSecret(prompt) : await question(prompt)).trim();
+  return answer || current;
+}
+
+async function testConnection(config: LLMConfig) {
+  const client = createClient(config);
+  // 1) 列出可用模型（部分中转服务不支持，失败不算错）
+  try {
+    const models = await client.models.list();
+    const ids = models.data.map((m) => m.id);
+    if (ids.length) console.log(`  可用模型：${ids.slice(0, 15).join(", ")}${ids.length > 15 ? " …" : ""}`);
+    if (ids.length && !ids.includes(config.model)) {
+      console.log(`  \x1b[33m注意：列表里没有 ${config.model}，请确认模型名\x1b[0m`);
+    }
+  } catch (err) {
+    const status = (err as { status?: number }).status;
+    if (status === 401 || status === 403) throw err; // Key 错误，直接报告
+    console.log("  （该服务不支持 /models，跳过模型列表）");
+  }
+  // 2) 发一条最小的对话请求，确认地址、Key、模型都正确
+  const res = await client.chat.completions.create({
+    model: config.model,
+    messages: [{ role: "user", content: "Reply with: ok" }],
+    max_tokens: 5,
+  });
+  console.log(`  \x1b[32m✓ 连接成功\x1b[0m，模型回复：${res.choices[0]?.message.content ?? "(空)"}`);
+}
+
+async function main() {
+  const env = readEnvFile();
+  console.log("\n配置模型 API（兼容 OpenAI 接口即可，回车保留方括号中的当前值）\n");
+
+  while (true) {
+    let baseURL: string;
+    while (true) {
+      try {
+        baseURL = normalizeBaseURL(await ask("API 地址 (Base URL)", env.LLM_BASE_URL || DEFAULTS.baseURL));
+        break;
+      } catch {
+        console.log("  地址格式不对，示例：https://api.deepseek.com 或 https://your-host/v1");
+      }
+    }
+    let apiKey = "";
+    while (!apiKey) {
+      apiKey = await ask("API Key", env.LLM_API_KEY ?? "", { secret: true });
+      if (!apiKey) console.log("  API Key 不能为空");
+    }
+    const model = await ask("模型名 (Model)", env.LLM_MODEL || DEFAULTS.model);
+    const config: LLMConfig = { baseURL, apiKey, model };
+
+    console.log("\n测试连接…");
+    let ok = true;
+    try {
+      await testConnection(config);
+    } catch (err) {
+      ok = false;
+      const e = err as { status?: number; message: string };
+      console.log(`  \x1b[31m✗ 连接失败\x1b[0m${e.status ? `（HTTP ${e.status}）` : ""}：${e.message}`);
+      if (e.status === 404) console.log("  提示：很多服务的地址需要以 /v1 结尾");
+      if (e.status === 401) console.log("  提示：API Key 不正确");
+    }
+
+    const prompt = ok ? "保存到 .env？(Y/n) " : "仍然保存？(y/N) 输入 r 重新填写：";
+    const choice = (await question(prompt)).trim().toLowerCase();
+    if (choice === "r") {
+      Object.assign(env, { LLM_BASE_URL: baseURL, LLM_API_KEY: apiKey, LLM_MODEL: model });
+      continue;
+    }
+    if (ok ? choice === "n" : choice !== "y") {
+      console.log("未保存。");
+      break;
+    }
+    // 保留 .env 里的其他变量，只更新这三项
+    const merged = { ...env, LLM_BASE_URL: baseURL, LLM_API_KEY: apiKey, LLM_MODEL: model };
+    const body = Object.entries(merged).map(([k, v]) => `${k}=${v}`).join("\n") + "\n";
+    writeFileSync(ENV_PATH, body, { mode: 0o600 });
+    console.log(`已保存到 ${ENV_PATH}（已被 .gitignore 忽略，不会提交）`);
+    break;
+  }
+}
+
+main().catch((err) => {
+  console.error(err);
+  process.exit(1);
+});

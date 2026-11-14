@@ -1,0 +1,23 @@
+{
+  "name": "my-harness",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "A personal AI agent harness, built step by step following Learn Claude Code",
+  "scripts": {
+    "setup": "tsx src/setup.ts",
+    "s01": "tsx src/s01-agent-loop.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "openai": "^7.57.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}
