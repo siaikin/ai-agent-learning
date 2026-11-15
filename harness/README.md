@@ -13,6 +13,8 @@ npm install
 npm run setup   # 配置表单：API 地址、API Key、模型名，会自动测试连接并保存到 .env
 npm run s01     # 运行 s01：最小 agent 循环
 npm run s02     # 运行 s02：5 个工具 + 分发表
+npm run s03     # 运行 s03：执行前权限检查（拒绝 / 询问 / 放行）
+npm test        # 运行单元测试
 ```
 
 配置保存在 `harness/.env`（已被 git 忽略）。也可以复制 `.env.example` 手动填写：
@@ -23,7 +25,12 @@ npm run s02     # 运行 s02：5 个工具 + 分发表
 | `LLM_API_KEY` | API Key | （必填） |
 | `LLM_MODEL` | 模型名 | `deepseek-chat` |
 
-> ⚠️ s01 / s02 会直接执行模型生成的 shell 命令，请在临时目录中试用。权限系统在 s03 实现。
+> ⚠️ s01 / s02 会直接执行模型生成的 shell 命令，请在临时目录中试用。s03 起有权限检查，但正则匹配命令不是可靠的安全边界，仍建议在临时目录或容器里试。
+
+## 目录结构
+
+- `src/sNN-*.ts`：每章一个可独立运行的文件，保留为那一章的快照
+- `src/lib/`：章节之间共用的模块（工具集、权限……），后面的章节在这里逐步累积
 
 ## 进度
 
@@ -31,4 +38,5 @@ npm run s02     # 运行 s02：5 个工具 + 分发表
 | --- | --- | --- |
 | s01 Agent Loop | [src/s01-agent-loop.ts](src/s01-agent-loop.ts) | ✅ |
 | s02 Tool Use | [src/s02-tool-use.ts](src/s02-tool-use.ts) | ✅ |
-| s03 Permission | | ⬜ |
+| s03 Permission | [src/s03-permission.ts](src/s03-permission.ts)、[src/lib/permission.ts](src/lib/permission.ts) | ✅ |
+| s04 Hooks | | ⬜ |
