@@ -151,6 +151,35 @@ export const TOOLS: ChatCompletionTool[] = tools.map(({ name, description, param
 }));
 export const TOOL_HANDLERS = Object.fromEntries(tools.map((t) => [t.name, t.handler]));
 
+/**
+ * 工具集（s05 起使用）：基础工具 + 各章新增的工具，一起生成 schema 和执行函数。
+ * s03 / s04 仍使用上面固定的 TOOLS / executeTool。
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export interface Toolset {
+  defs: ToolDef<any>[];
+  schemas: ChatCompletionTool[];
+  execute: (name: string, args: Record<string, unknown>) => string;
+}
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function buildToolset(extra: ToolDef<any>[] = []): Toolset {
+  const defs = [...tools, ...extra];
+  const handlers = Object.fromEntries(defs.map((t) => [t.name, t.handler]));
+  return {
+    defs,
+    schemas: defs.map(({ name, description, parameters }) => ({ type: "function", function: { name, description, parameters } })),
+    execute: (name, args) => {
+      const handler = handlers[name];
+      if (!handler) return `Error: unknown tool "${name}"`;
+      try {
+        return handler(args).slice(0, MAX_OUTPUT);
+      } catch (err) {
+        return `Error: ${(err as Error).message}`;
+      }
+    },
+  };
+}
+
 /** 解析模型给的参数字符串。失败时返回 Error 文本，交给调用方还给模型 */
 export function parseArgs(rawArgs: string): { ok: true; args: Record<string, unknown> } | { ok: false; error: string } {
   try {
