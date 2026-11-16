@@ -9,6 +9,7 @@
     "s01": "tsx src/s01-agent-loop.ts",
     "s02": "tsx src/s02-tool-use.ts",
     "s03": "tsx src/s03-permission.ts",
+    "s04": "tsx src/s04-hooks.ts",
     "test": "node --import tsx --test \"src/**/*.test.ts\"",
     "typecheck": "tsc --noEmit"
   },

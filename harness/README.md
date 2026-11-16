@@ -14,6 +14,7 @@ npm run setup   # 配置表单：API 地址、API Key、模型名，会自动测
 npm run s01     # 运行 s01：最小 agent 循环
 npm run s02     # 运行 s02：5 个工具 + 分发表
 npm run s03     # 运行 s03：执行前权限检查（拒绝 / 询问 / 放行）
+npm run s04     # 运行 s04：hook 插件（上下文、审计日志、权限、截断、测试守卫）
 npm test        # 运行单元测试
 ```
 
@@ -39,4 +40,5 @@ npm test        # 运行单元测试
 | s01 Agent Loop | [src/s01-agent-loop.ts](src/s01-agent-loop.ts) | ✅ |
 | s02 Tool Use | [src/s02-tool-use.ts](src/s02-tool-use.ts) | ✅ |
 | s03 Permission | [src/s03-permission.ts](src/s03-permission.ts)、[src/lib/permission.ts](src/lib/permission.ts) | ✅ |
-| s04 Hooks | | ⬜ |
+| s04 Hooks | [src/s04-hooks.ts](src/s04-hooks.ts)、[src/lib/hooks.ts](src/lib/hooks.ts) | ✅ |
+| s05 TodoWrite | | ⬜ |
