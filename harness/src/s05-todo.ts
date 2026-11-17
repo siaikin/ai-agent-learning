@@ -22,6 +22,7 @@ import { HookRegistry, type HookPlugin } from "./lib/hooks.js";
 import type { SessionAllow } from "./lib/permission.js";
 import { TodoList, todoTool } from "./lib/todo.js";
 import { auditPlugin, permissionPlugin } from "./lib/plugins.js";
+import { initTelemetry } from "./lib/telemetry.js";
 import { WORKDIR, buildToolset } from "./lib/tools.js";
 
 const SYSTEM = `You are a coding agent running in ${WORKDIR} on ${process.platform}.
@@ -80,7 +81,9 @@ export function todoPlugin(list: TodoList, remindAfter = 5): HookPlugin {
 }
 
 async function main() {
-  const config = loadConfig();
+  const config = loadConfig(); // 同时把 .env 加载进环境变量，Langfuse SDK 从这里读 key
+  const telemetry = initTelemetry({ tags: ["s05"] });
+  const client = telemetry.wrapClient(createClient(config));
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   const history: ChatCompletionMessageParam[] = [{ role: "system", content: SYSTEM }];
   const sessionAllow: SessionAllow = new Set();
@@ -94,6 +97,11 @@ async function main() {
 
   console.log(`s05 todo · ${config.baseURL} · model=${config.model}`);
   console.log(`工具：${toolset.defs.map((t) => t.name).join(", ")}`);
+  console.log(
+    telemetry.enabled
+      ? `\x1b[90mLangfuse 已启用 · ${process.env.LANGFUSE_BASE_URL} · session ${telemetry.sessionId}\x1b[0m`
+      : "\x1b[90mLangfuse 未启用（运行 npm run setup -- langfuse 配置）\x1b[0m",
+  );
   console.log("输入 q 退出");
   while (true) {
     let query: string;
@@ -106,15 +114,15 @@ async function main() {
     const { block } = await hooks.runUserPromptSubmit({ prompt: query });
     if (block) continue;
     history.push({ role: "user", content: query });
-    const answer = await runAgentLoop(history, {
-      client: createClient(config),
-      model: config.model,
-      toolset,
-      hooks,
-    });
+    // 一轮对话 = Langfuse 里的一条 trace（没配置 Langfuse 时 traceTurn 直接执行，什么都不记录）
+    const answer = await telemetry.traceTurn(query, () =>
+      runAgentLoop(history, { client, model: config.model, toolset, hooks }),
+    );
     console.log(`\n${answer}\n`);
   }
   rl.close();
+  if (telemetry.enabled) console.log("\x1b[90m正在把剩余数据发送到 Langfuse…\x1b[0m");
+  await telemetry.shutdown(); // 退出前一定要 flush，否则最后几条数据会丢
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

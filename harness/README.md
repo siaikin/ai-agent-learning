@@ -29,6 +29,24 @@ npm test        # 运行单元测试
 
 > ⚠️ s01 / s02 会直接执行模型生成的 shell 命令，请在临时目录中试用。s03 起有权限检查，但正则匹配命令不是可靠的安全边界，仍建议在临时目录或容器里试。
 
+## 可观测性（Langfuse，可选）
+
+从 s05 起，配置 Langfuse 后会自动上报每一轮对话：
+
+```
+Session（一次运行）
+└─ Trace "agent-turn"（你的一次输入）
+   ├─ Generation：每次 LLM 调用（完整消息、输出、token、耗时）
+   ├─ Tool "tool:xxx"：每次工具调用（参数、输出；被拦截标 WARNING，出错标 ERROR）
+   └─ Event "stop-hook"：Stop 钩子要求继续时
+```
+
+1. 在 [Langfuse Cloud](https://cloud.langfuse.com) 注册并创建项目，在 Settings → API Keys 创建 key
+2. 运行 `npm run setup -- langfuse`，选择数据区域、填写 key，表单会自动测试连接
+3. 正常运行 `npm run s05`，退出时会把剩余数据发送完
+
+没配置时完全不联网，不影响使用。实现见 [src/lib/telemetry.ts](src/lib/telemetry.ts)。
+
 ## 目录结构
 
 - `src/sNN-*.ts`：每章一个可独立运行的文件，保留为那一章的快照

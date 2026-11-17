@@ -117,7 +117,66 @@ async function testConnection(config: LLMConfig) {
   console.log(`  \x1b[32m✓ 连接成功\x1b[0m，模型回复：${res.choices[0]?.message.content ?? "(空)"}`);
 }
 
+/** 把若干变量合并写回 .env，保留其他已有变量 */
+function writeEnv(updates: Record<string, string>) {
+  const merged = { ...readEnvFile(), ...updates };
+  const body = Object.entries(merged).map(([k, v]) => `${k}=${v}`).join("\n") + "\n";
+  writeFileSync(ENV_PATH, body, { mode: 0o600 });
+}
+
+const LANGFUSE_REGIONS: Record<string, string> = {
+  "1": "https://cloud.langfuse.com",
+  "2": "https://us.cloud.langfuse.com",
+  "3": "https://jp.cloud.langfuse.com",
+};
+
+/** 用公开 API 验证 key：成功时返回项目名 */
+async function testLangfuse(baseUrl: string, publicKey: string, secretKey: string) {
+  const res = await fetch(`${baseUrl}/api/public/projects`, {
+    headers: { Authorization: `Basic ${Buffer.from(`${publicKey}:${secretKey}`).toString("base64")}` },
+  });
+  if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status}`), { status: res.status });
+  const body = (await res.json()) as { data?: { name?: string }[] };
+  return body.data?.[0]?.name ?? "(unknown project)";
+}
+
+async function langfuseSetup() {
+  const env = readEnvFile();
+  console.log("\n配置 Langfuse 可观测性（可选）：每次 LLM 调用、工具调用都会上报到 Langfuse");
+  console.log("在 Langfuse 网页的 Settings → API Keys 里创建 key。回车保留方括号中的当前值。\n");
+  console.log("数据区域：[1] 欧盟 cloud.langfuse.com  [2] 美国  [3] 日本  或直接输入地址（自部署）");
+  const current = env.LANGFUSE_BASE_URL || LANGFUSE_REGIONS["1"]!;
+  const regionInput = await ask("区域或地址", current);
+  const baseUrl = (LANGFUSE_REGIONS[regionInput] ?? regionInput).replace(/\/+$/, "");
+  const publicKey = await ask("Public Key (pk-lf-...)", env.LANGFUSE_PUBLIC_KEY ?? "");
+  const secretKey = await ask("Secret Key (sk-lf-...)", env.LANGFUSE_SECRET_KEY ?? "", { secret: true });
+  if (!publicKey || !secretKey) {
+    console.log("未填写 key，跳过 Langfuse。");
+    return;
+  }
+  console.log("\n测试 Langfuse 连接…");
+  let ok = true;
+  try {
+    const project = await testLangfuse(baseUrl, publicKey, secretKey);
+    console.log(`  \x1b[32m✓ 连接成功\x1b[0m，项目：${project}`);
+  } catch (err) {
+    ok = false;
+    const e = err as { status?: number; message: string };
+    console.log(`  \x1b[31m✗ 连接失败\x1b[0m：${e.message}`);
+    if (e.status === 401) console.log("  提示：key 不正确，或者 key 属于另一个数据区域");
+  }
+  const choice = (await question(ok ? "保存到 .env？(Y/n) " : "仍然保存？(y/N) ")).trim().toLowerCase();
+  if (ok ? choice === "n" : choice !== "y") {
+    console.log("未保存。");
+    return;
+  }
+  writeEnv({ LANGFUSE_BASE_URL: baseUrl, LANGFUSE_PUBLIC_KEY: publicKey, LANGFUSE_SECRET_KEY: secretKey });
+  console.log(`已保存到 ${ENV_PATH}。之后运行 npm run s05 就会自动上报。`);
+}
+
 async function main() {
+  if (process.argv.includes("langfuse")) return langfuseSetup();
+
   const env = readEnvFile();
   console.log("\n配置模型 API（兼容 OpenAI 接口即可，回车保留方括号中的当前值）\n");
 
@@ -162,12 +221,14 @@ async function main() {
       break;
     }
     // 保留 .env 里的其他变量，只更新这三项
-    const merged = { ...env, LLM_BASE_URL: baseURL, LLM_API_KEY: apiKey, LLM_MODEL: model };
-    const body = Object.entries(merged).map(([k, v]) => `${k}=${v}`).join("\n") + "\n";
-    writeFileSync(ENV_PATH, body, { mode: 0o600 });
+    writeEnv({ LLM_BASE_URL: baseURL, LLM_API_KEY: apiKey, LLM_MODEL: model });
     console.log(`已保存到 ${ENV_PATH}（已被 .gitignore 忽略，不会提交）`);
     break;
   }
+
+  const configured = Boolean(readEnvFile().LANGFUSE_PUBLIC_KEY);
+  const next = (await question(`\n配置 Langfuse 可观测性？${configured ? "（已配置）" : ""}(y/N) `)).trim().toLowerCase();
+  if (next === "y") await langfuseSetup();
 }
 
 main().catch((err) => {

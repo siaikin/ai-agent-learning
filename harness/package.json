@@ -18,6 +18,10 @@
     "node": ">=22"
   },
   "dependencies": {
+    "@langfuse/openai": "^6.1.1",
+    "@langfuse/otel": "^6.1.1",
+    "@langfuse/tracing": "^6.1.1",
+    "@opentelemetry/sdk-node": "^0.223.2",
     "openai": "^7.57.0"
   },
   "devDependencies": {
