@@ -26,6 +26,7 @@
 - [ ] **阶段 3：长任务、多 agent 与 MCP**（s12–s20 + Anthropic / OpenAI harness 文章）→ harness v0.3
 - [ ] **阶段 4：评估与可观测性**：评测集、trace 可视化、消融实验
 - [ ] **阶段 5（可选）：开源模型与部署**：vLLM、ModelScope
+- [ ] **专题：提示词学习**（贯穿各阶段，重点配合 s10 System Prompt）：模板变量 `{{}}`、XML 标签、few-shot、提示词注入与越狱防御
 
 ## 学习日志
 
