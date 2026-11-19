@@ -35,17 +35,34 @@ export interface AgentOptions {
 const textOf = (content: Anthropic.ContentBlock[]) =>
   content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("\n");
 
+/**
+ * 上报用的内容块：去掉对看日志没用的字段（thinking 块的 signature 是一长串校验值，有些服务还会返回空字符串）。
+ * 只影响日志，发给模型的对话历史保持原样。
+ */
+const forLog = (content: Anthropic.ContentBlock[] | Anthropic.ContentBlockParam[]) =>
+  content.map((b) => (b.type === "thinking" ? { type: "thinking", thinking: b.thinking } : b));
+
+/** 上报用的对话历史：同样清理每条 assistant 消息里的内容块 */
+const messagesForLog = (messages: Anthropic.MessageParam[]) =>
+  messages.map((m) => (Array.isArray(m.content) ? { role: m.role, content: forLog(m.content) } : m));
+
 /** 调用一次模型，并把这次调用记成 Langfuse generation */
 function callModel(messages: Anthropic.MessageParam[], opts: AgentOptions) {
   const { client, model, system, maxTokens, toolset } = opts;
   return startActiveObservation(
     "anthropic.messages.create",
     async (generation) => {
-      generation.update({ model, input: { system, messages }, modelParameters: { max_tokens: maxTokens } });
+      // 输入记成「system 消息 + 对话消息」的列表，输出记成一条 assistant 消息。
+      // Langfuse 的 Preview / Messages 视图能把这种结构渲染成对话，而不是一大段 JSON
+      generation.update({
+        model,
+        input: [{ role: "system", content: system }, ...messagesForLog(messages)],
+        modelParameters: { max_tokens: maxTokens },
+      });
       const response = await client.messages.create({ model, max_tokens: maxTokens, system, messages, tools: toolset.schemas });
       const u = response.usage;
       generation.update({
-        output: response.content,
+        output: { role: "assistant", content: forLog(response.content) },
         usageDetails: {
           input: u.input_tokens,
           output: u.output_tokens,

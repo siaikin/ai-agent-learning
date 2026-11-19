@@ -48,7 +48,13 @@ export function initTelemetry(opts: { traceName?: string; tags?: string[] } = {}
     };
   }
 
-  const sdk = new NodeSDK({ spanProcessors: [new LangfuseSpanProcessor()] });
+  const sdk = new NodeSDK({
+    spanProcessors: [new LangfuseSpanProcessor()],
+    serviceName: "my-harness",
+    // 不自动采集本机信息（用户名、项目路径、Node 路径、主机名、进程号……）：
+    // 这些对看日志没用，还会把隐私一起上传
+    autoDetectResources: false,
+  });
   sdk.start();
 
   return {
