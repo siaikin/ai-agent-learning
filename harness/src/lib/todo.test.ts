@@ -37,12 +37,12 @@ test("render 显示勾选状态和进度", () => {
   assert.equal(list.unfinished.length, 2);
 });
 
-test("todo_write 工具：成功返回清单，失败返回 Error 且不触发 onChange", () => {
+test("todo_write 工具：成功返回清单，失败返回 Error 且不触发 onChange", async () => {
   const list = new TodoList();
   let changes = 0;
   const tool = todoTool(list, () => changes++);
-  assert.match(tool.handler({ todos: [item("1", "in_progress")] }), /\[>\] 1\. task 1/);
+  assert.match(await tool.handler({ todos: [item("1", "in_progress")] }), /\[>\] 1\. task 1/);
   assert.equal(changes, 1);
-  assert.match(tool.handler({ todos: [item("1", "bogus")] }), /^Error: .*not changed/);
+  assert.match(await tool.handler({ todos: [item("1", "bogus")] }), /^Error: .*not changed/);
   assert.equal(changes, 1);
 });

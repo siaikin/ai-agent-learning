@@ -16,6 +16,7 @@ npm run s02     # 运行 s02：5 个工具 + 分发表
 npm run s03     # 运行 s03：执行前权限检查（拒绝 / 询问 / 放行）
 npm run s04     # 运行 s04：hook 插件（上下文、审计日志、权限、截断、测试守卫）
 npm run s05     # 运行 s05：todo 清单 + 提醒 / 收工检查插件
+npm run s06     # 运行 s06：task 工具，把子任务交给上下文隔离的子 agent
 npm test        # 运行单元测试
 ```
 
@@ -52,7 +53,7 @@ Session（一次运行）
 
 - `src/sNN-*.ts`：每章一个可独立运行的文件，保留为那一章的快照
 - `src/lib/`：章节之间共用的模块，后面的章节在这里逐步累积
-  - `agent.ts` 循环 · `tools.ts` 工具集 · `hooks.ts` 钩子 · `plugins.ts` 共用插件 · `permission.ts` 权限 · `todo.ts` 清单 · `ask.ts` 问用户
+  - `agent.ts` 循环 · `tools.ts` 工具集 · `hooks.ts` 钩子 · `plugins.ts` 共用插件 · `permission.ts` 权限 · `todo.ts` 清单 · `subagent.ts` 子 agent · `ask.ts` 问用户 · `telemetry.ts` 可观测性
 
 ## 进度
 
@@ -63,4 +64,5 @@ Session（一次运行）
 | s03 Permission | [src/s03-permission.ts](src/s03-permission.ts)、[src/lib/permission.ts](src/lib/permission.ts) | ✅ |
 | s04 Hooks | [src/s04-hooks.ts](src/s04-hooks.ts)、[src/lib/hooks.ts](src/lib/hooks.ts) | ✅ |
 | s05 TodoWrite | [src/s05-todo.ts](src/s05-todo.ts)、[src/lib/todo.ts](src/lib/todo.ts) | ✅ |
-| s06 Subagent | | ⬜ |
+| s06 Subagent | [src/s06-subagent.ts](src/s06-subagent.ts)、[src/lib/subagent.ts](src/lib/subagent.ts) | ✅ |
+| s07 Skills | | ⬜ |

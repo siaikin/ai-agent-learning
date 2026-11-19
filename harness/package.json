@@ -11,6 +11,7 @@
     "s03": "tsx src/s03-permission.ts",
     "s04": "tsx src/s04-hooks.ts",
     "s05": "tsx src/s05-todo.ts",
+    "s06": "tsx src/s06-subagent.ts",
     "test": "node --import tsx --test \"src/**/*.test.ts\"",
     "typecheck": "tsc --noEmit"
   },

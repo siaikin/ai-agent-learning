@@ -28,7 +28,8 @@ export interface ToolDef<A> {
   name: string;
   description: string;
   input_schema: Anthropic.Tool.InputSchema; // JSON Schema，字段名和 Claude API 一致
-  handler: (args: A) => string;
+  /** 可以是同步或异步的。s06 的 task 工具要等子 agent 跑完，所以是异步的 */
+  handler: (args: A) => string | Promise<string>;
 }
 // 泛型只用于让 handler 的参数有类型提示；注册表里统一当作 ToolDef<any>
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -157,7 +158,7 @@ export const TOOL_HANDLERS = Object.fromEntries(tools.map((t) => [t.name, t.hand
 export interface Toolset {
   defs: ToolDef<any>[];
   schemas: Anthropic.Tool[];
-  execute: (name: string, args: Record<string, unknown>) => string;
+  execute: (name: string, args: Record<string, unknown>) => Promise<string>;
 }
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function buildToolset(extra: ToolDef<any>[] = []): Toolset {
@@ -166,11 +167,11 @@ export function buildToolset(extra: ToolDef<any>[] = []): Toolset {
   return {
     defs,
     schemas: defs.map(toSchema),
-    execute: (name, args) => {
+    execute: async (name, args) => {
       const handler = handlers[name];
       if (!handler) return `Error: unknown tool "${name}"`;
       try {
-        return handler(args).slice(0, MAX_OUTPUT);
+        return (await handler(args)).slice(0, MAX_OUTPUT);
       } catch (err) {
         return `Error: ${(err as Error).message}`;
       }
@@ -194,7 +195,10 @@ export function executeTool(name: string, args: Record<string, unknown>): string
   const handler = TOOL_HANDLERS[name];
   if (!handler) return `Error: unknown tool "${name}"`;
   try {
-    return handler(args).slice(0, MAX_OUTPUT);
+    // s03 / s04 的同步版本：基础工具都是同步的
+    const output = handler(args);
+    if (typeof output !== "string") return `Error: tool "${name}" is async; use buildToolset().execute`;
+    return output.slice(0, MAX_OUTPUT);
   } catch (err) {
     return `Error: ${(err as Error).message}`;
   }

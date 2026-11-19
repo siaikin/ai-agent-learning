@@ -30,6 +30,8 @@ export interface AgentOptions {
   hooks: HookRegistry;
   /** 打印工具调用和输出；测试时可以传一个空函数 */
   log?: (line: string) => void;
+  /** 最多调用模型多少次，超过就停下（s06 的子 agent 用它防止停不下来）。不设置表示不限制 */
+  maxTurns?: number;
 }
 
 const textOf = (content: Anthropic.ContentBlock[]) =>
@@ -104,7 +106,7 @@ function runToolUse(block: Anthropic.ToolUseBlock, opts: AgentOptions): Promise<
         span.update({ output: blocked, level: "WARNING", statusMessage: "blocked by PreToolUse hook" });
         return result(blocked, true);
       }
-      const raw = toolset.execute(block.name, checked.args);
+      const raw = await toolset.execute(block.name, checked.args);
       const output = await hooks.runPostToolUse({ tool: block.name, args: checked.args, output: raw });
       const isError = output.startsWith("Error");
       span.update({
@@ -123,7 +125,15 @@ function runToolUse(block: Anthropic.ToolUseBlock, opts: AgentOptions): Promise<
 export async function runAgentLoop(messages: Anthropic.MessageParam[], opts: AgentOptions) {
   const { hooks, log = console.log } = opts;
   let stopHookActive = false;
+  let turns = 0;
   while (true) {
+    if (opts.maxTurns !== undefined && turns >= opts.maxTurns) {
+      log(`\x1b[33m⚠ 达到 ${opts.maxTurns} 轮上限，停止\x1b[0m`);
+      const lastText = [...messages].reverse().find((m) => m.role === "assistant");
+      const text = lastText && Array.isArray(lastText.content) ? textOf(lastText.content as Anthropic.ContentBlock[]) : "";
+      return `[stopped after ${opts.maxTurns} turns without finishing] ${text}`.trim();
+    }
+    turns++;
     const response = await callModel(messages, opts);
     // 把完整的内容块数组（不只是文字）追加进历史
     messages.push({ role: "assistant", content: response.content });
