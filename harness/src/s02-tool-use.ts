@@ -12,10 +12,13 @@
  * 与教程的差异（TypeScript 版的设计选择）：
  *   1. 用 defineTool() 把「schema + 实现」放在一个对象里，再自动生成 TOOLS 和 TOOL_HANDLERS。
  *      教程把两者分开写，便于理解；Claude Code 的 buildTool() 也是放在一起的，这样加工具时不会漏掉一边。
- *   2. 工具名写错、参数 JSON 解析失败、handler 抛异常时，都把错误作为 tool 结果还给模型，
+ *   2. 工具名写错、参数不是对象、handler 抛异常时，都把错误作为 tool_result（is_error: true）还给模型，
  *      而不是让整个程序崩掉——模型看到错误后通常能自己修正。
  *   3. edit_file 要求 old_text 在文件中恰好出现一次（Claude Code 的做法），
  *      教程是替换第一次出现的位置，容易改错地方。
+ *
+ * 使用 Claude（Anthropic Messages API）格式：工具定义的 schema 字段叫 input_schema，
+ * tool_use.input 已经是解析好的对象，不用再 JSON.parse。
  *
  * ⚠️ bash 仍然不受限制（rm -rf 照样能跑），请在临时目录中运行。权限系统在 s03 实现。
  */
@@ -23,10 +26,7 @@ import { execSync } from "node:child_process";
 import { globSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
-import type {
-  ChatCompletionMessageParam,
-  ChatCompletionTool,
-} from "openai/resources/chat/completions";
+import type Anthropic from "@anthropic-ai/sdk";
 
 import { createClient, loadConfig } from "./config.js";
 
@@ -56,7 +56,7 @@ function safePath(p: string): string {
 interface ToolDef<A> {
   name: string;
   description: string;
-  parameters: Record<string, unknown>; // JSON Schema
+  input_schema: Anthropic.Tool.InputSchema; // JSON Schema
   handler: (args: A) => string;
 }
 // 泛型只用于让 handler 的参数有类型提示；注册表里统一当作 ToolDef<any>
@@ -67,7 +67,7 @@ const tools = [
   defineTool<{ command: string }>({
     name: "bash",
     description: "Run a shell command and return its stdout and stderr.",
-    parameters: {
+    input_schema: {
       type: "object",
       properties: { command: { type: "string", description: "The shell command to run" } },
       required: ["command"],
@@ -91,7 +91,7 @@ const tools = [
   defineTool<{ path: string; limit?: number }>({
     name: "read_file",
     description: "Read a text file. Returns its contents with line numbers.",
-    parameters: {
+    input_schema: {
       type: "object",
       properties: {
         path: { type: "string", description: "File path, relative to the workspace" },
@@ -114,7 +114,7 @@ const tools = [
   defineTool<{ path: string; content: string }>({
     name: "write_file",
     description: "Create or overwrite a file with the given content.",
-    parameters: {
+    input_schema: {
       type: "object",
       properties: {
         path: { type: "string", description: "File path, relative to the workspace" },
@@ -134,7 +134,7 @@ const tools = [
     name: "edit_file",
     description:
       "Replace old_text with new_text in a file. old_text must appear exactly once; include enough surrounding context to make it unique.",
-    parameters: {
+    input_schema: {
       type: "object",
       properties: {
         path: { type: "string", description: "File path, relative to the workspace" },
@@ -158,7 +158,7 @@ const tools = [
   defineTool<{ pattern: string }>({
     name: "glob",
     description: 'Find files matching a glob pattern, e.g. "**/*.ts". Returns paths relative to the workspace.',
-    parameters: {
+    input_schema: {
       type: "object",
       properties: { pattern: { type: "string", description: "Glob pattern" } },
       required: ["pattern"],
@@ -173,63 +173,63 @@ const tools = [
   }),
 ];
 
-// ---- 从注册表自动生成：给模型看的 TOOLS，和给循环用的 TOOL_HANDLERS ----
-const TOOLS: ChatCompletionTool[] = tools.map(({ name, description, parameters }) => ({
-  type: "function",
-  function: { name, description, parameters },
-}));
+// ---- 从注册表自动生成：给模型看的 TOOLS（Claude 的 tools 格式），和给循环用的 TOOL_HANDLERS ----
+const TOOLS: Anthropic.Tool[] = tools.map(({ name, description, input_schema }) => ({ name, description, input_schema }));
 const TOOL_HANDLERS = Object.fromEntries(tools.map((t) => [t.name, t.handler]));
 
-function runTool(name: string, rawArgs: string): string {
+/** 查表执行一个工具调用。所有错误都变成 "Error: …" 文本，由调用方标成 is_error */
+function runTool(name: string, input: unknown): string {
   const handler = TOOL_HANDLERS[name];
   if (!handler) return `Error: unknown tool "${name}"`;
-  let args: unknown;
-  try {
-    args = JSON.parse(rawArgs || "{}");
-  } catch {
-    return `Error: invalid JSON arguments: ${rawArgs}`;
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    return `Error: tool input must be a JSON object, got ${JSON.stringify(input)}`;
   }
   try {
-    return handler(args).slice(0, MAX_OUTPUT);
+    return handler(input).slice(0, MAX_OUTPUT);
   } catch (err) {
     return `Error: ${(err as Error).message}`;
   }
 }
 
 // ---- 核心：agent 循环（和 s01 相同，只有执行工具那一行变成查表） ----
-export async function agentLoop(messages: ChatCompletionMessageParam[]) {
+export async function agentLoop(messages: Anthropic.MessageParam[]) {
   while (true) {
-    const response = await client.chat.completions.create({
+    const response = await client.messages.create({
       model: MODEL,
+      max_tokens: config.maxTokens,
+      system: SYSTEM,
       messages,
       tools: TOOLS,
     });
-    const message = response.choices[0]?.message;
-    if (!message) throw new Error("模型没有返回内容");
+    messages.push({ role: "assistant", content: response.content });
 
-    messages.push(message);
+    const toolUses = response.content.filter((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
+    if (toolUses.length === 0) return response.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("\n");
 
-    const toolCalls = message.tool_calls ?? [];
-    if (toolCalls.length === 0) return message.content ?? "";
-
-    if (toolCalls.length > 1) console.log(`\x1b[2m(本轮 ${toolCalls.length} 个工具调用)\x1b[0m`);
+    if (toolUses.length > 1) console.log(`\x1b[2m(本轮 ${toolUses.length} 个工具调用)\x1b[0m`);
     // 和教程一样按顺序逐个执行；Claude Code 会把连续的只读调用并发执行
-    for (const call of toolCalls) {
-      if (call.type !== "function") continue;
-      const { name, arguments: rawArgs } = call.function;
-      console.log(`\x1b[33m▶ ${name}\x1b[0m \x1b[2m${rawArgs.slice(0, 200)}\x1b[0m`);
-      const output = runTool(name, rawArgs); // ← s01 这里是 runBash(command)
+    const results: Anthropic.ToolResultBlockParam[] = [];
+    for (const block of toolUses) {
+      console.log(`\x1b[33m▶ ${block.name}\x1b[0m \x1b[2m${JSON.stringify(block.input).slice(0, 200)}\x1b[0m`);
+      const output = runTool(block.name, block.input); // ← s01 这里是 runBash(command)
       console.log(output.slice(0, 500));
-      messages.push({ role: "tool", tool_call_id: call.id, content: output });
+      results.push({
+        type: "tool_result",
+        tool_use_id: block.id,
+        content: output,
+        ...(output.startsWith("Error") ? { is_error: true } : {}),
+      });
     }
+    // 同一轮的所有工具结果放进同一条 user 消息
+    messages.push({ role: "user", content: results });
   }
 }
 
 // ---- REPL ----
 async function main() {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const history: ChatCompletionMessageParam[] = [{ role: "system", content: SYSTEM }];
-  console.log(`s02 tool use · ${config.baseURL} · model=${MODEL} · 工具：${tools.map((t) => t.name).join(", ")}`);
+  const history: Anthropic.MessageParam[] = [];
+  console.log(`s02 tool use · ${config.baseURL || "Anthropic 官方"} · model=${MODEL} · 工具：${tools.map((t) => t.name).join(", ")}`);
   console.log("输入 q 退出");
   while (true) {
     let query: string;

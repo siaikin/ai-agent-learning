@@ -4,19 +4,19 @@
  * 结构（在 Langfuse 里看到的样子）：
  *   Session（一次 npm run 启动到退出）
  *   └─ Trace "agent-turn"（你的一次输入）            asType: agent
- *      ├─ Generation（每次调用 LLM，observeOpenAI 自动记录：消息、token、耗时）
+ *      ├─ Generation "anthropic.messages.create"（每次调用模型：完整输入输出、token、耗时）
  *      ├─ Tool "tool:read_file"（每次工具调用：参数、输出、是否被拦截）
  *      └─ Event "stop-hook"（Stop 钩子要求继续时）
  *
  * 只有 .env 里配置了 LANGFUSE_PUBLIC_KEY 和 LANGFUSE_SECRET_KEY 才会启用；
  * 否则所有函数都是空操作，不联网、不影响性能。用 `npm run setup` 可以填写这几个值。
  *
- * 接入方式完全按官方文档：OpenTelemetry NodeSDK + LangfuseSpanProcessor + observeOpenAI
+ * 接入方式按官方文档：OpenTelemetry NodeSDK + LangfuseSpanProcessor
  * https://langfuse.com/docs/observability/get-started
+ * 模型调用和工具调用由 lib/agent.ts 用 startActiveObservation 手动记录（Claude 格式，没有 observeOpenAI 这种包装器）。
  */
 import { randomUUID } from "node:crypto";
 
-import { observeOpenAI } from "@langfuse/openai";
 import { LangfuseSpanProcessor } from "@langfuse/otel";
 import { propagateAttributes, startActiveObservation } from "@langfuse/tracing";
 import { NodeSDK } from "@opentelemetry/sdk-node";
@@ -24,8 +24,6 @@ import { NodeSDK } from "@opentelemetry/sdk-node";
 export interface Telemetry {
   enabled: boolean;
   sessionId: string;
-  /** 包装 OpenAI 客户端，之后每次 LLM 调用都会自动记录为一个 generation */
-  wrapClient<T extends object>(client: T): T;
   /** 把一轮对话记录为一条 trace，里面的 LLM 调用、工具调用都会挂在它下面 */
   traceTurn(input: string, fn: () => Promise<string>): Promise<string>;
   /** 退出前调用：把还没发出去的数据发完 */
@@ -45,7 +43,6 @@ export function initTelemetry(opts: { traceName?: string; tags?: string[] } = {}
     return {
       enabled: false,
       sessionId,
-      wrapClient: (c) => c,
       traceTurn: (_input, fn) => fn(),
       shutdown: async () => {},
     };
@@ -57,7 +54,6 @@ export function initTelemetry(opts: { traceName?: string; tags?: string[] } = {}
   return {
     enabled: true,
     sessionId,
-    wrapClient: (client) => observeOpenAI(client, { sessionId, tags: opts.tags }),
     traceTurn: (input, fn) =>
       propagateAttributes({ sessionId, traceName, tags: opts.tags }, () =>
         startActiveObservation(

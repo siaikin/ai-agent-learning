@@ -15,13 +15,13 @@ import { execSync } from "node:child_process";
 import { appendFileSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
-import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
+import type Anthropic from "@anthropic-ai/sdk";
 
 import { createClient, loadConfig } from "./config.js";
 import { terminalAsk, type AskUser } from "./lib/ask.js";
 import { HookRegistry, type HookPlugin } from "./lib/hooks.js";
 import { checkPermission, type SessionAllow } from "./lib/permission.js";
-import { TOOLS, WORKDIR, executeTool, parseArgs } from "./lib/tools.js";
+import { TOOLS, WORKDIR, executeTool, validateInput } from "./lib/tools.js";
 
 const config = loadConfig();
 const MODEL = config.model;
@@ -137,16 +137,21 @@ export function testGuardPlugin(): HookPlugin {
 
 // ======================= 核心：agent 循环 =======================
 
-export async function agentLoop(messages: ChatCompletionMessageParam[], hooks: HookRegistry) {
+export async function agentLoop(messages: Anthropic.MessageParam[], hooks: HookRegistry) {
   let stopHookActive = false; // 本轮是否已经被 Stop 钩子强制续跑过
   while (true) {
-    const response = await client.chat.completions.create({ model: MODEL, messages, tools: TOOLS });
-    const message = response.choices[0]?.message;
-    if (!message) throw new Error("模型没有返回内容");
-    messages.push(message);
+    const response = await client.messages.create({
+      model: MODEL,
+      max_tokens: config.maxTokens,
+      system: SYSTEM,
+      messages,
+      tools: TOOLS,
+    });
+    messages.push({ role: "assistant", content: response.content });
+    const toolUses = response.content.filter((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
+    const text = response.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("\n");
 
-    const toolCalls = message.tool_calls ?? [];
-    if (toolCalls.length === 0) {
+    if (toolUses.length === 0) {
       // ↓ Stop：模型想收工，问问 hook 同不同意。每轮最多续跑一次，防止死循环
       if (!stopHookActive) {
         const continueWith = await hooks.runStop({ messages });
@@ -156,25 +161,27 @@ export async function agentLoop(messages: ChatCompletionMessageParam[], hooks: H
           continue;
         }
       }
-      return message.content ?? "";
+      return text;
     }
 
-    for (const call of toolCalls) {
-      if (call.type !== "function") continue;
-      const { name, arguments: rawArgs } = call.function;
-      const reply = (content: string) => messages.push({ role: "tool", tool_call_id: call.id, content });
-      console.log(`\x1b[33m▶ ${name}\x1b[0m \x1b[2m${rawArgs.slice(0, 200)}\x1b[0m`);
+    // 同一轮的所有工具结果收集起来，最后放进同一条 user 消息
+    const results: Anthropic.ToolResultBlockParam[] = [];
+    for (const block of toolUses) {
+      const name = block.name;
+      const reply = (content: string, isError = false) =>
+        results.push({ type: "tool_result", tool_use_id: block.id, content, ...(isError ? { is_error: true } : {}) });
+      console.log(`\x1b[33m▶ ${name}\x1b[0m \x1b[2m${JSON.stringify(block.input).slice(0, 200)}\x1b[0m`);
 
-      const parsed = parseArgs(rawArgs);
+      const parsed = validateInput(block.input);
       if (!parsed.ok) {
-        reply(parsed.error);
+        reply(parsed.error, true);
         continue;
       }
 
       // ↓ PreToolUse：s03 这里是 checkPermission(...)，现在交给 hook
       const blocked = await hooks.runPreToolUse({ tool: name, args: parsed.args });
       if (blocked) {
-        reply(blocked);
+        reply(blocked, true);
         continue;
       }
 
@@ -182,8 +189,9 @@ export async function agentLoop(messages: ChatCompletionMessageParam[], hooks: H
       // ↓ PostToolUse：hook 可以改写输出
       const output = await hooks.runPostToolUse({ tool: name, args: parsed.args, output: raw });
       console.log(output.slice(0, 500));
-      reply(output);
+      reply(output, output.startsWith("Error"));
     }
+    messages.push({ role: "user", content: results });
   }
 }
 
@@ -191,7 +199,7 @@ export async function agentLoop(messages: ChatCompletionMessageParam[], hooks: H
 
 async function main() {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const history: ChatCompletionMessageParam[] = [{ role: "system", content: SYSTEM }];
+  const history: Anthropic.MessageParam[] = []; // Claude 格式：system prompt 单独传，不在 messages 里
   const sessionAllow: SessionAllow = new Set();
 
   // 注册顺序就是执行顺序：audit 在 permission 前面，所以被拒绝的调用也会被记录
@@ -202,7 +210,7 @@ async function main() {
     .use(largeOutputPlugin())
     .use(testGuardPlugin());
 
-  console.log(`s04 hooks · ${config.baseURL} · model=${MODEL}`);
+  console.log(`s04 hooks · ${config.baseURL || "Anthropic 官方"} · model=${MODEL}`);
   for (const [event, names] of Object.entries(hooks.list())) dim(`  ${event.padEnd(16)} ${names.join(", ")}`);
   console.log("输入 q 退出");
 

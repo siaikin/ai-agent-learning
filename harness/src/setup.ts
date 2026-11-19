@@ -74,12 +74,19 @@ function maskKey(key: string) {
   return key.length <= 8 ? "****" : `${key.slice(0, 3)}****${key.slice(-4)}`;
 }
 
-/** 规范化 API 地址：去掉结尾的 / 和误填的 /chat/completions */
+/**
+ * 规范化 API 地址（Claude 格式）：SDK 会自己在后面拼 /v1/messages，
+ * 所以去掉结尾的 /、误填的 /v1/messages 或 /v1。留空表示 Anthropic 官方地址。
+ */
 function normalizeBaseURL(input: string) {
   let url = input.trim().replace(/\/+$/, "");
-  if (url.endsWith("/chat/completions")) {
-    url = url.slice(0, -"/chat/completions".length);
-    console.log(`  已去掉结尾的 /chat/completions → ${url}`);
+  if (!url) return "";
+  for (const suffix of ["/v1/messages", "/messages", "/v1"]) {
+    if (url.endsWith(suffix)) {
+      url = url.slice(0, -suffix.length);
+      console.log(`  已去掉结尾的 ${suffix}（SDK 会自动拼上 /v1/messages）→ ${url}`);
+      break;
+    }
   }
   new URL(url); // 格式不对会抛错
   return url;
@@ -109,12 +116,13 @@ async function testConnection(config: LLMConfig) {
     console.log("  （该服务不支持 /models，跳过模型列表）");
   }
   // 2) 发一条最小的对话请求，确认地址、Key、模型都正确
-  const res = await client.chat.completions.create({
+  const res = await client.messages.create({
     model: config.model,
+    max_tokens: 64,
     messages: [{ role: "user", content: "Reply with: ok" }],
-    max_tokens: 5,
   });
-  console.log(`  \x1b[32m✓ 连接成功\x1b[0m，模型回复：${res.choices[0]?.message.content ?? "(空)"}`);
+  const text = res.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("").trim();
+  console.log(`  \x1b[32m✓ 连接成功\x1b[0m，模型回复：${text || "(空)"}（stop_reason: ${res.stop_reason}）`);
 }
 
 /** 把若干变量合并写回 .env，保留其他已有变量 */
@@ -178,7 +186,8 @@ async function main() {
   if (process.argv.includes("langfuse")) return langfuseSetup();
 
   const env = readEnvFile();
-  console.log("\n配置模型 API（兼容 OpenAI 接口即可，回车保留方括号中的当前值）\n");
+  console.log("\n配置模型 API（Claude / Anthropic Messages API 格式，回车保留方括号中的当前值）");
+  console.log("API 地址留空表示 Anthropic 官方；也可以填 Anthropic 兼容的服务或你自己的中转\n");
 
   while (true) {
     let baseURL: string;
@@ -187,7 +196,7 @@ async function main() {
         baseURL = normalizeBaseURL(await ask("API 地址 (Base URL)", env.LLM_BASE_URL || DEFAULTS.baseURL));
         break;
       } catch {
-        console.log("  地址格式不对，示例：https://api.deepseek.com 或 https://your-host/v1");
+        console.log("  地址格式不对，示例：https://api.anthropic.com 或 https://your-host/anthropic（留空 = 官方）");
       }
     }
     let apiKey = "";
@@ -196,7 +205,8 @@ async function main() {
       if (!apiKey) console.log("  API Key 不能为空");
     }
     const model = await ask("模型名 (Model)", env.LLM_MODEL || DEFAULTS.model);
-    const config: LLMConfig = { baseURL, apiKey, model };
+    const maxTokens = Number(await ask("单次回复 token 上限 (max_tokens)", env.LLM_MAX_TOKENS || String(DEFAULTS.maxTokens))) || DEFAULTS.maxTokens;
+    const config: LLMConfig = { baseURL, apiKey, model, maxTokens };
 
     console.log("\n测试连接…");
     let ok = true;
@@ -206,14 +216,14 @@ async function main() {
       ok = false;
       const e = err as { status?: number; message: string };
       console.log(`  \x1b[31m✗ 连接失败\x1b[0m${e.status ? `（HTTP ${e.status}）` : ""}：${e.message}`);
-      if (e.status === 404) console.log("  提示：很多服务的地址需要以 /v1 结尾");
+      if (e.status === 404) console.log("  提示：确认这个地址提供的是 Anthropic 格式的接口（/v1/messages），而不是 OpenAI 格式（/v1/chat/completions）");
       if (e.status === 401) console.log("  提示：API Key 不正确");
     }
 
     const prompt = ok ? "保存到 .env？(Y/n) " : "仍然保存？(y/N) 输入 r 重新填写：";
     const choice = (await question(prompt)).trim().toLowerCase();
     if (choice === "r") {
-      Object.assign(env, { LLM_BASE_URL: baseURL, LLM_API_KEY: apiKey, LLM_MODEL: model });
+      Object.assign(env, { LLM_BASE_URL: baseURL, LLM_API_KEY: apiKey, LLM_MODEL: model, LLM_MAX_TOKENS: String(maxTokens) });
       continue;
     }
     if (ok ? choice === "n" : choice !== "y") {
@@ -221,7 +231,7 @@ async function main() {
       break;
     }
     // 保留 .env 里的其他变量，只更新这三项
-    writeEnv({ LLM_BASE_URL: baseURL, LLM_API_KEY: apiKey, LLM_MODEL: model });
+    writeEnv({ LLM_BASE_URL: baseURL, LLM_API_KEY: apiKey, LLM_MODEL: model, LLM_MAX_TOKENS: String(maxTokens) });
     console.log(`已保存到 ${ENV_PATH}（已被 .gitignore 忽略，不会提交）`);
     break;
   }

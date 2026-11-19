@@ -13,11 +13,11 @@
  * 这样同一个循环可以接终端、Web UI，测试时也能传入一个自动回答的假函数。
  */
 import { createInterface, type Interface } from "node:readline/promises";
-import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
+import type Anthropic from "@anthropic-ai/sdk";
 
 import { createClient, loadConfig } from "./config.js";
 import { checkPermission, type SessionAllow } from "./lib/permission.js";
-import { TOOLS, WORKDIR, executeTool, parseArgs, tools } from "./lib/tools.js";
+import { TOOLS, WORKDIR, executeTool, validateInput, tools } from "./lib/tools.js";
 
 const config = loadConfig();
 const MODEL = config.model;
@@ -54,28 +54,35 @@ function terminalAsk(rl: Interface): AskUser {
 
 // ---- 核心：agent 循环（s02 的循环 + 执行前的权限检查） ----
 export async function agentLoop(
-  messages: ChatCompletionMessageParam[],
+  messages: Anthropic.MessageParam[],
   askUser: AskUser,
   sessionAllow: SessionAllow,
 ) {
   while (true) {
-    const response = await client.chat.completions.create({ model: MODEL, messages, tools: TOOLS });
-    const message = response.choices[0]?.message;
-    if (!message) throw new Error("模型没有返回内容");
-    messages.push(message);
+    const response = await client.messages.create({
+      model: MODEL,
+      max_tokens: config.maxTokens,
+      system: SYSTEM,
+      messages,
+      tools: TOOLS,
+    });
+    messages.push({ role: "assistant", content: response.content });
+    const toolUses = response.content.filter((b): b is Anthropic.ToolUseBlock => b.type === "tool_use");
+    const text = response.content.flatMap((b) => (b.type === "text" ? [b.text] : [])).join("\n");
 
-    const toolCalls = message.tool_calls ?? [];
-    if (toolCalls.length === 0) return message.content ?? "";
+    if (toolUses.length === 0) return text;
 
-    for (const call of toolCalls) {
-      if (call.type !== "function") continue;
-      const { name, arguments: rawArgs } = call.function;
-      const reply = (content: string) => messages.push({ role: "tool", tool_call_id: call.id, content });
-      console.log(`\x1b[33m▶ ${name}\x1b[0m \x1b[2m${rawArgs.slice(0, 200)}\x1b[0m`);
+    // 同一轮的所有工具结果收集起来，最后放进同一条 user 消息
+    const results: Anthropic.ToolResultBlockParam[] = [];
+    for (const block of toolUses) {
+      const name = block.name;
+      const reply = (content: string, isError = false) =>
+        results.push({ type: "tool_result", tool_use_id: block.id, content, ...(isError ? { is_error: true } : {}) });
+      console.log(`\x1b[33m▶ ${name}\x1b[0m \x1b[2m${JSON.stringify(block.input).slice(0, 200)}\x1b[0m`);
 
-      const parsed = parseArgs(rawArgs);
+      const parsed = validateInput(block.input);
       if (!parsed.ok) {
-        reply(parsed.error);
+        reply(parsed.error, true);
         continue;
       }
 
@@ -83,7 +90,7 @@ export async function agentLoop(
       const decision = checkPermission(name, parsed.args, sessionAllow);
       if (decision.behavior === "deny") {
         console.log(`\x1b[31m⛔ 已拦截：${decision.reason}\x1b[0m`);
-        reply(`Permission denied by policy: ${decision.reason}. This action is never allowed; do not retry it.`);
+        reply(`Permission denied by policy: ${decision.reason}. This action is never allowed; do not retry it.`, true);
         continue;
       }
       if (decision.behavior === "ask") {
@@ -94,6 +101,7 @@ export async function agentLoop(
             "Permission denied by the user." +
               (answer.feedback ? ` User says: ${answer.feedback}` : "") +
               " Do not retry the same action; choose another approach or ask the user.",
+            true,
           );
           continue;
         }
@@ -103,18 +111,19 @@ export async function agentLoop(
 
       const output = executeTool(name, parsed.args);
       console.log(output.slice(0, 500));
-      reply(output);
+      reply(output, output.startsWith("Error"));
     }
+    messages.push({ role: "user", content: results });
   }
 }
 
 // ---- REPL ----
 async function main() {
   const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const history: ChatCompletionMessageParam[] = [{ role: "system", content: SYSTEM }];
+  const history: Anthropic.MessageParam[] = []; // Claude 格式：system prompt 单独传，不在 messages 里
   const sessionAllow: SessionAllow = new Set();
   const askUser = terminalAsk(rl);
-  console.log(`s03 permission · ${config.baseURL} · model=${MODEL} · 工具：${tools.map((t) => t.name).join(", ")}`);
+  console.log(`s03 permission · ${config.baseURL || "Anthropic 官方"} · model=${MODEL} · 工具：${tools.map((t) => t.name).join(", ")}`);
   console.log("输入 q 退出");
   while (true) {
     let query: string;

@@ -16,7 +16,7 @@
  *   - Stop 钩子每轮最多强制续跑一次（Claude Code 的 stopHookActive），避免永远停不下来
  *   - UserPromptSubmit 真的能补充上下文，PostToolUse 真的能改写输出（教程只打印日志）
  */
-import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
+import type Anthropic from "@anthropic-ai/sdk";
 
 type Awaitable<T> = T | Promise<T>;
 type Args = Record<string, unknown>;
@@ -35,7 +35,7 @@ export interface HookEvents {
     result: { output: string } | void;
   };
   Stop: {
-    input: { messages: ChatCompletionMessageParam[] };
+    input: { messages: Anthropic.MessageParam[] };
     result: { continueWith: string } | void;
   };
 }

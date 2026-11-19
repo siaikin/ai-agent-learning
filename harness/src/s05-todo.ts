@@ -13,7 +13,7 @@
  * 规划本身完全由模型完成，harness 只提供“记下来、显示出来、提醒它”的机制。
  */
 import { createInterface } from "node:readline/promises";
-import type { ChatCompletionMessageParam } from "openai/resources/chat/completions";
+import type Anthropic from "@anthropic-ai/sdk";
 
 import { createClient, loadConfig } from "./config.js";
 import { runAgentLoop } from "./lib/agent.js";
@@ -83,9 +83,9 @@ export function todoPlugin(list: TodoList, remindAfter = 5): HookPlugin {
 async function main() {
   const config = loadConfig(); // 同时把 .env 加载进环境变量，Langfuse SDK 从这里读 key
   const telemetry = initTelemetry({ tags: ["s05"] });
-  const client = telemetry.wrapClient(createClient(config));
+  const client = createClient(config);
   const rl = createInterface({ input: process.stdin, output: process.stdout });
-  const history: ChatCompletionMessageParam[] = [{ role: "system", content: SYSTEM }];
+  const history: Anthropic.MessageParam[] = []; // Claude 格式：system prompt 不在 messages 里
   const sessionAllow: SessionAllow = new Set();
   const todos = new TodoList();
 
@@ -116,7 +116,7 @@ async function main() {
     history.push({ role: "user", content: query });
     // 一轮对话 = Langfuse 里的一条 trace（没配置 Langfuse 时 traceTurn 直接执行，什么都不记录）
     const answer = await telemetry.traceTurn(query, () =>
-      runAgentLoop(history, { client, model: config.model, toolset, hooks }),
+      runAgentLoop(history, { client, model: config.model, system: SYSTEM, maxTokens: config.maxTokens, toolset, hooks }),
     );
     console.log(`\n${answer}\n`);
   }

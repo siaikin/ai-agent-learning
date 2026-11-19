@@ -67,7 +67,7 @@ export function todoTool(list: TodoList, onChange?: (list: TodoList) => void) {
       "Create or update your task list. Always send the COMPLETE list (it replaces the previous one). " +
       "Use it for tasks with 3 or more steps. Keep exactly one item in_progress while working, " +
       "and mark items completed as soon as they are done.",
-    parameters: {
+    input_schema: {
       type: "object",
       properties: {
         todos: {

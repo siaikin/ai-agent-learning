@@ -7,7 +7,7 @@
 import { execSync } from "node:child_process";
 import { globSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import type { ChatCompletionTool } from "openai/resources/chat/completions";
+import type Anthropic from "@anthropic-ai/sdk";
 
 export const WORKDIR = process.cwd();
 
@@ -27,7 +27,7 @@ export function safePath(p: string): string {
 export interface ToolDef<A> {
   name: string;
   description: string;
-  parameters: Record<string, unknown>; // JSON Schema
+  input_schema: Anthropic.Tool.InputSchema; // JSON Schema，字段名和 Claude API 一致
   handler: (args: A) => string;
 }
 // 泛型只用于让 handler 的参数有类型提示；注册表里统一当作 ToolDef<any>
@@ -38,7 +38,7 @@ export const tools = [
   defineTool<{ command: string }>({
     name: "bash",
     description: "Run a shell command and return its stdout and stderr.",
-    parameters: {
+    input_schema: {
       type: "object",
       properties: { command: { type: "string", description: "The shell command to run" } },
       required: ["command"],
@@ -62,7 +62,7 @@ export const tools = [
   defineTool<{ path: string; limit?: number }>({
     name: "read_file",
     description: "Read a text file. Returns its contents with line numbers.",
-    parameters: {
+    input_schema: {
       type: "object",
       properties: {
         path: { type: "string", description: "File path, relative to the workspace" },
@@ -85,7 +85,7 @@ export const tools = [
   defineTool<{ path: string; content: string }>({
     name: "write_file",
     description: "Create or overwrite a file with the given content.",
-    parameters: {
+    input_schema: {
       type: "object",
       properties: {
         path: { type: "string", description: "File path, relative to the workspace" },
@@ -105,7 +105,7 @@ export const tools = [
     name: "edit_file",
     description:
       "Replace old_text with new_text in a file. old_text must appear exactly once; include enough surrounding context to make it unique.",
-    parameters: {
+    input_schema: {
       type: "object",
       properties: {
         path: { type: "string", description: "File path, relative to the workspace" },
@@ -129,7 +129,7 @@ export const tools = [
   defineTool<{ pattern: string }>({
     name: "glob",
     description: 'Find files matching a glob pattern, e.g. "**/*.ts". Returns paths relative to the workspace.',
-    parameters: {
+    input_schema: {
       type: "object",
       properties: { pattern: { type: "string", description: "Glob pattern" } },
       required: ["pattern"],
@@ -144,11 +144,9 @@ export const tools = [
   }),
 ];
 
-// ---- 从注册表自动生成：给模型看的 TOOLS，和给循环用的 TOOL_HANDLERS ----
-export const TOOLS: ChatCompletionTool[] = tools.map(({ name, description, parameters }) => ({
-  type: "function",
-  function: { name, description, parameters },
-}));
+// ---- 从注册表自动生成：给模型看的 TOOLS（Claude 的 tools 格式），和给循环用的 TOOL_HANDLERS ----
+const toSchema = ({ name, description, input_schema }: ToolDef<unknown>): Anthropic.Tool => ({ name, description, input_schema });
+export const TOOLS: Anthropic.Tool[] = tools.map(toSchema);
 export const TOOL_HANDLERS = Object.fromEntries(tools.map((t) => [t.name, t.handler]));
 
 /**
@@ -158,7 +156,7 @@ export const TOOL_HANDLERS = Object.fromEntries(tools.map((t) => [t.name, t.hand
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export interface Toolset {
   defs: ToolDef<any>[];
-  schemas: ChatCompletionTool[];
+  schemas: Anthropic.Tool[];
   execute: (name: string, args: Record<string, unknown>) => string;
 }
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -167,7 +165,7 @@ export function buildToolset(extra: ToolDef<any>[] = []): Toolset {
   const handlers = Object.fromEntries(defs.map((t) => [t.name, t.handler]));
   return {
     defs,
-    schemas: defs.map(({ name, description, parameters }) => ({ type: "function", function: { name, description, parameters } })),
+    schemas: defs.map(toSchema),
     execute: (name, args) => {
       const handler = handlers[name];
       if (!handler) return `Error: unknown tool "${name}"`;
@@ -180,20 +178,18 @@ export function buildToolset(extra: ToolDef<any>[] = []): Toolset {
   };
 }
 
-/** 解析模型给的参数字符串。失败时返回 Error 文本，交给调用方还给模型 */
-export function parseArgs(rawArgs: string): { ok: true; args: Record<string, unknown> } | { ok: false; error: string } {
-  try {
-    const args = JSON.parse(rawArgs || "{}");
-    if (typeof args !== "object" || args === null || Array.isArray(args)) {
-      return { ok: false, error: `Error: arguments must be a JSON object: ${rawArgs}` };
-    }
-    return { ok: true, args };
-  } catch {
-    return { ok: false, error: `Error: invalid JSON arguments: ${rawArgs}` };
+/**
+ * 检查模型给的工具参数。Claude 格式里 tool_use.input 已经是解析好的对象（OpenAI 格式是 JSON 字符串），
+ * 这里只确认它确实是一个对象，失败时返回 Error 文本，交给调用方还给模型。
+ */
+export function validateInput(input: unknown): { ok: true; args: Record<string, unknown> } | { ok: false; error: string } {
+  if (typeof input !== "object" || input === null || Array.isArray(input)) {
+    return { ok: false, error: `Error: tool input must be a JSON object, got ${JSON.stringify(input)}` };
   }
+  return { ok: true, args: input as Record<string, unknown> };
 }
 
-/** 执行一个已经解析好参数的工具调用。所有错误都变成 "Error: …" 文本 */
+/** 执行一个已经检查过参数的工具调用。所有错误都变成 "Error: …" 文本 */
 export function executeTool(name: string, args: Record<string, unknown>): string {
   const handler = TOOL_HANDLERS[name];
   if (!handler) return `Error: unknown tool "${name}"`;
