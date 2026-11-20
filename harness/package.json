@@ -12,6 +12,7 @@
     "s04": "tsx src/s04-hooks.ts",
     "s05": "tsx src/s05-todo.ts",
     "s06": "tsx src/s06-subagent.ts",
+    "s07": "tsx src/s07-skills.ts",
     "test": "node --import tsx --test \"src/**/*.test.ts\"",
     "typecheck": "tsc --noEmit"
   },

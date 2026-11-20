@@ -17,6 +17,7 @@ npm run s03     # 运行 s03：执行前权限检查（拒绝 / 询问 / 放行�
 npm run s04     # 运行 s04：hook 插件（上下文、审计日志、权限、截断、测试守卫）
 npm run s05     # 运行 s05：todo 清单 + 提醒 / 收工检查插件
 npm run s06     # 运行 s06：task 工具，把子任务交给上下文隔离的子 agent
+npm run s07     # 运行 s07：技能按需加载（skills/ 内置 + 项目的 .harness/skills/）
 npm test        # 运行单元测试
 ```
 
@@ -52,8 +53,9 @@ Session（一次运行）
 ## 目录结构
 
 - `src/sNN-*.ts`：每章一个可独立运行的文件，保留为那一章的快照
+- `skills/`：内置技能，每个技能一个目录，里面是 `SKILL.md`（可带附件）。项目自己的技能放在 `<工作目录>/.harness/skills/`，同名会覆盖内置的
 - `src/lib/`：章节之间共用的模块，后面的章节在这里逐步累积
-  - `agent.ts` 循环 · `tools.ts` 工具集 · `hooks.ts` 钩子 · `plugins.ts` 共用插件 · `permission.ts` 权限 · `todo.ts` 清单 · `subagent.ts` 子 agent · `ask.ts` 问用户 · `telemetry.ts` 可观测性
+  - `agent.ts` 循环 · `tools.ts` 工具集 · `hooks.ts` 钩子 · `plugins.ts` 共用插件 · `permission.ts` 权限 · `todo.ts` 清单 · `subagent.ts` 子 agent · `skills.ts` 技能 · `ask.ts` 问用户 · `telemetry.ts` 可观测性
 
 ## 进度
 
@@ -65,4 +67,5 @@ Session（一次运行）
 | s04 Hooks | [src/s04-hooks.ts](src/s04-hooks.ts)、[src/lib/hooks.ts](src/lib/hooks.ts) | ✅ |
 | s05 TodoWrite | [src/s05-todo.ts](src/s05-todo.ts)、[src/lib/todo.ts](src/lib/todo.ts) | ✅ |
 | s06 Subagent | [src/s06-subagent.ts](src/s06-subagent.ts)、[src/lib/subagent.ts](src/lib/subagent.ts) | ✅ |
-| s07 Skills | | ⬜ |
+| s07 Skills | [src/s07-skills.ts](src/s07-skills.ts)、[src/lib/skills.ts](src/lib/skills.ts)、[skills/](skills/) | ✅ |
+| s08 Context Compact | | ⬜ |
